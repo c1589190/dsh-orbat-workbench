@@ -38,10 +38,10 @@
 ## Responsibility 1: Evidence-aware quantity and aggregation
 **Files:** `src/model.js`, new `src/evidence.js` if helpful; test `tests/evidence-model.test.js`; renderer consumer integration reserved for area 4.
 **Interfaces:** consume existing `normalizeRoot`, `normalizeNodePatch`, `stats`; produce Common Contract metadata and `coverage` without breaking existing scalar fields or non-ORBAT custom data.
-- [ ] Independent test agent writes behavior tests: explicit actual0, unknown0, estimate10, legacy0, known 3+unknown and source totals not added; malformed status/sources fail closed and unrelated custom survives.
-- [ ] Run `node --test tests/evidence-model.test.js`; record expected RED.
-- [ ] One writer implements normalize/patch/validation/stats with no unrelated file edits; `node --test tests/evidence-model.test.js tests/model.test.js` passes.
-- [ ] Controller reviews schema, data safety and tests; record observed status in `docs/progress.md`.
+- [x] Independent test agent writes behavior tests: explicit actual0, unknown0, estimate10, legacy0, known 3+unknown and source totals not added; malformed status/sources fail closed and unrelated custom survives.
+- [x] Run `node --test tests/evidence-model.test.js`; record expected RED.
+- [x] One writer implements normalize/patch/validation/stats with no unrelated file edits; `node --test tests/evidence-model.test.js tests/model.test.js` passes.
+- [x] Controller reviews schema, data safety and tests; record observed status in `docs/progress.md`.
 
 ## Responsibility 2: Native interchange, catalog and template persistence
 **Files:** `src/workspace.js`, `src/model.js` only if controller coordinates, new persistence helper if needed; test `tests/native-interchange.test.js`.

@@ -1,10 +1,16 @@
 # Demo execution ledger
 
+## 2026-11-15 Git 仓库初始化与责任区1（已完成）
+- 按用户要求初始化 Git 并推送 remote `git@github.com:c1589190/dsh-orbat-workbench.git`，package 版本改为 `0.0.1`、`license: MIT`；LICENSE 保留 M.Hikari 与 contributors 两行版权。基线提交 `273f988`（导入当前源码，含当时 10 项预期 RED）。
+- 责任区1 GREEN，提交 `cc02905`：`stats()` 先规范化原始树再统计，合法缺字段树不再 TypeError/NaN；装备 coverage 新增 `known` 按名称小计与 `knownTotal`，排除 unknown/legacy-ambiguous 占位，未标注空装备清单计 legacy 歧义、显式 actual 空清单为已知空；证据只读 own `orbat` 属性（新增 5 项原型链安全测试到 `tests/evidence-model.test.js`）。
+- 控制方复跑：`node --test tests/evidence-model.test.js tests/model.test.js` 42/42；`node --test tests/*.test.js` **153/153**；`node scripts/check.mjs` PASS。未运行 build，未重启 Host，未做 GUI 视觉验收。
+- 下一步：责任区2（原生备份、装备目录与模板持久化、workspace v2 迁移、兼容导出损失报告）。
+
 ## 2026-11-15 文游编制工作流（已暂停，交接中）
 - **交接入口：`docs/HANDOFF-2026-11-15-orbat-game-workflow.md`。** 用户要求保存状态、由其他 Agent 接手；当前会话 goal 已暂停，所有本轮子 Agent 已结束。
 - 用户选择原生无损+原站兼容方案 B，要求所有工具能力、录入工作流和内置 skill 改进；要求 DeepSeek Flash 子 Agent、SimulatorMosire 责任区制和名称不带“示意”。
 - 设计：`docs/superpowers/specs/2026-11-15-orbat-game-workflow.md`；计划：`docs/superpowers/plans/2026-11-15-orbat-game-workflow.md`。
-- 裁定：本目录非 Git，延续项目既有明确决策原地开发，不初始化 Git、不虚构提交；同时只允许一个生产代码写入 Agent，测试 Agent 先建立 RED，再交实现者 GREEN。
+- 裁定：本目录非 Git，延续项目既有明确决策原地开发，不初始化 Git、不虚构提交；同时只允许一个生产代码写入 Agent，测试 Agent 先建立 RED，再交实现者 GREEN。（该“非 Git”裁定已由 2026-11-15 用户要求初始化 Git 取代，见上方新条目。）
 - 本轮基线：`pnpm test && pnpm run check` 退出码 0，128/128 测试通过；有 Node Undici experimental warning。测试在临时数据目录，不操作实时工作区。生产源码基线保存在 `/tmp/orbat-baseline-73O2GyAz`（创建时测试 Agent 可能已开始编写新测试；源码尚无写入 Agent）。
 - 责任区1未完成：第一轮 RED→GREEN 后实现 `src/evidence.js` 并修改 `src/model.js`；依据只读评审补了空装备、装备已知小计、缺字段原始树等边界测试。交接前控制方复跑 `node --test tests/evidence-model.test.js tests/model.test.js`：退出1，37项中27过、10项预期RED；结果日志 `/tmp/orbat-handoff-tests-nfYsf5wj`。所有测试/实现 Agent 已停止，下一步按交接文档修复，不得宣称全量通过。
 - 内置 skill 的无新增指导基线已运行：现有 skill 只规定协作事务，未要求完整文游数据、清洁名称与字段来源；独立场景输出曾在缺乏佐证时假定具体型号和分配，因此不可直接采用场景中提议的数值。后续 GREEN 必须验证可玩估算不冒充史实、避免不合理定额。
