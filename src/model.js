@@ -216,6 +216,38 @@ export function assertSafeKeys(value, label = 'object') {
   }
 }
 
+/**
+ * Deep-merge a namespaced custom patch into an existing custom value without
+ * replacing unrelated namespaces. Plain objects merge recursively; `null`
+ * removes a key; arrays and scalars replace. A non-object existing custom value
+ * is incompatible and fails closed instead of being overwritten.
+ */
+export function mergeCustomValue(base, patch) {
+  if (patch === undefined) return base === undefined ? undefined : structuredClone(base);
+  if (patch === null) return null;
+  if (!isPlainObject(patch)) {
+    throw new OrbatError('invalid_custom', 'custom 补丁必须是普通对象或 null', {});
+  }
+  assertSafeKeys(patch, 'custom');
+  if (base !== undefined && base !== null && !isPlainObject(base)) {
+    throw new OrbatError('custom_conflict', '现有 custom 不是对象，无法按命名空间合并', {});
+  }
+  const result = base === undefined || base === null ? {} : structuredClone(base);
+  for (const key of Object.keys(patch)) {
+    const value = patch[key];
+    if (value === null) {
+      delete result[key];
+      continue;
+    }
+    if (isPlainObject(value) && isPlainObject(result[key])) {
+      result[key] = mergeCustomValue(result[key], value);
+    } else {
+      result[key] = structuredClone(value);
+    }
+  }
+  return result;
+}
+
 export function isValidType(type) {
   return typeof type === 'string' && TYPE_SET.has(type);
 }

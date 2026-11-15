@@ -3,6 +3,7 @@ import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {stats,TYPES,ECHELONS} from './model.js';
 import {renderDocument} from './render.js';
+import {queryNodes,compilePlan} from './batch.js';
 
 const walk=(node,fn,path=[])=>{fn(node,path);for(const child of node.children || [])walk(child,fn,[...path,node.name]);};
 const brief=doc=>({id:doc.id,name:doc.name,revision:doc.revision,stats:stats(doc.root)});
@@ -26,6 +27,7 @@ export function createApplication(workspace,{artifactDir}) {
       const snapshot=workspace.snapshot();
       return {sequence:snapshot.sequence,documents:snapshot.documents.map(d=>({...d,stats:stats(d.root)})),
         changes:workspace.changes(Math.max(0,snapshot.sequence-30),30),
+        resources:workspace.resources(),
         capabilities:{types:keys(TYPES),echelons:keys(ECHELONS),upstream:'Army_Editor 1.8.0',previewModes:['editor','list'],experimental:true}};
     },
     subscribe(listener){return workspace.subscribe(listener);},
@@ -65,19 +67,23 @@ export function createApplication(workspace,{artifactDir}) {
           })};
         }
         if(action==='query') {
-          const matches=[],limit=args.limit ?? 100;
-          if(!Number.isInteger(limit)||limit<1||limit>200)throw new Error('limit 必须在 1–200');
-          let total=0;
-          for(const doc of select(args.documentIds))walk(doc.root,(node,path)=>{
-            if(args.text && !node.name.toLocaleLowerCase().includes(String(args.text).toLocaleLowerCase()))return;
-            if(args.type && node.type!==args.type)return;
-            if(args.echelon && node.echelon!==args.echelon)return;
-            total++;if(matches.length<limit)matches.push({documentId:doc.id,revision:doc.revision,node:{...node,children:undefined},path:[...path,node.name]});
-          });
+          const select0=args.select ?? {text:args.text,type:args.type,echelon:args.echelon,nodeIds:args.nodeIds};
+          const result=queryNodes({documents:select(args.documentIds),select:select0,limit:args.limit ?? 100,cursor:args.cursor,sequence:workspace.snapshot().sequence});
           // Undefined values cannot cross the DSH canonical JSON boundary.
-          return JSON.parse(JSON.stringify({ok:true,matches,total,truncated:total>matches.length}));
+          return JSON.parse(JSON.stringify(result));
+        }
+        if(action==='plan') {
+          return {ok:true,...compilePlan({documents:select(args.documentIds),sequence:workspace.snapshot().sequence,select:args.select ?? {},operation:args.operation,summary:args.summary,maxNodes:args.maxNodes})};
+        }
+        if(action==='commitPlan') {
+          if(!args.plan || typeof args.plan!=='object' || Array.isArray(args.plan))throw new Error('plan 必须是对象');
+          if(!Array.isArray(args.plan.edits))throw new Error('plan.edits 必须是数组');
+          const result=await workspace.transaction({edits:args.plan.edits,summary:args.plan.summary,guards:args.plan.guards ?? args.guards},actor);
+          return {...result,plan:{baseSequence:args.plan.baseSequence ?? null}};
         }
         if(action==='changes')return {ok:true,...workspace.changes(args.since ?? 0,args.limit ?? 50)};
+        if(action==='resources')return {ok:true,...workspace.resources()};
+        if(action==='updateResources')return await workspace.updateResources(args,actor);
         if(action==='create')return await workspace.create({name:args.name,root:args.root || {name:args.name || '新编制',type:'infantry',echelon:'battalion',children:[]}},actor);
         if(action==='duplicate') {
           const source=workspace.export([args.documentId],'mil-org');
@@ -105,10 +111,10 @@ export function createApplication(workspace,{artifactDir}) {
         }
         if(action==='export') {
           const ids=select(args.documentIds).map(d=>d.id),format=args.format || (ids.length===1?'mil-org':'mil-bundle');
-          const data=api.exportData(ids,format);await mkdir(artifactDir,{recursive:true});
+          const {payload:data,losses}=workspace.exportCompatible(ids,format);await mkdir(artifactDir,{recursive:true});
           const path=join(artifactDir,'armies-'+workspace.snapshot().sequence+'-'+randomUUID().slice(0,8)+'.json');
           await writeFile(path,JSON.stringify(data,null,2),'utf8');
-          return {ok:true,path,format,documentIds:ids,instructions:format==='mil-org'?'原编辑器：加载 → 从文件打开':'原编辑器：导入全部 → 加载相应存档；不包含自定义装备数值'};
+          return {ok:true,path,format,documentIds:ids,lossReport:losses,instructions:format==='mil-org'?'原编辑器：加载 → 从文件打开':'原编辑器：导入全部 → 加载相应存档；目录随包导出，别名/资料可能丢失'};
         }
         throw new Error('未知操作：'+action);
       }catch(error){return errorResult(error);}

@@ -8,6 +8,7 @@ import {
   NODE_FIELDS,
   assertSafeKeys,
   isPlainObject,
+  mergeCustomValue,
   normalizeNodePatch,
   normalizeRoot,
   stats,
@@ -190,7 +191,7 @@ function isDescendant(node, id) {
   return false;
 }
 
-function applyOperations(document, operations, documentId, diffs) {
+function applyOperations(document, operations, documentId, diffs, resources) {
   for (const operation of operations) {
     if (!isPlainObject(operation) || typeof operation.op !== 'string') {
       throw new OrbatError('invalid_operation', 'operation 必须是含 op 的普通对象', {});
@@ -345,6 +346,59 @@ function applyOperations(document, operations, documentId, diffs) {
             after: name,
           });
         }
+        break;
+      }
+      case 'mergeCustom': {
+        if (typeof operation.nodeId !== 'string' || operation.nodeId.length === 0) {
+          throw new OrbatError('invalid_operation', 'mergeCustom 需要 nodeId', {});
+        }
+        const found = findNode(document.root, operation.nodeId);
+        if (!found) throw notFound('node', operation.nodeId);
+        if (!isPlainObject(operation.fields) || !Object.hasOwn(operation.fields, 'custom')) {
+          throw new OrbatError('invalid_operation', 'mergeCustom 需要 fields.custom', {});
+        }
+        // Namespace merge first, then reuse the normal custom validation so
+        // evidence statuses/sources fail closed exactly like update.
+        const merged = mergeCustomValue(found.node.custom, operation.fields.custom);
+        const patch = normalizeNodePatch({ custom: merged });
+        const before = Object.hasOwn(found.node, 'custom') ? clone(found.node.custom) : null;
+        if (patch.custom === undefined) {
+          if (Object.hasOwn(found.node, 'custom')) delete found.node.custom;
+        } else {
+          found.node.custom = patch.custom;
+        }
+        const after = Object.hasOwn(found.node, 'custom') ? clone(found.node.custom) : null;
+        if (!isDeepStrictEqual(before, after)) {
+          diffs.push({ documentId, nodeId: operation.nodeId, field: 'custom', before, after });
+        }
+        break;
+      }
+      case 'template': {
+        if (typeof operation.parentId !== 'string' || operation.parentId.length === 0) {
+          throw new OrbatError('invalid_operation', 'template 需要 parentId', {});
+        }
+        if (typeof operation.templateId !== 'string' || operation.templateId.length === 0) {
+          throw new OrbatError('invalid_operation', 'template 需要 templateId', {});
+        }
+        const parent = findNode(document.root, operation.parentId);
+        if (!parent) throw notFound('node', operation.parentId);
+        const template = resources?.templates?.items?.[operation.templateId];
+        if (!template) throw notFound('template', operation.templateId);
+        const node = normalizeRoot(template.root);
+        if (operation.name !== undefined) {
+          const namePatch = normalizeNodePatch({ name: operation.name, customName: true });
+          node.name = namePatch.name;
+          node.customName = namePatch.customName;
+        }
+        const index = normalizeIndex(operation.index, parent.node.children.length);
+        parent.node.children.splice(index, 0, node);
+        diffs.push({
+          documentId,
+          nodeId: node.id,
+          field: '$node',
+          before: null,
+          after: clone(node),
+        });
         break;
       }
       default:
@@ -1383,9 +1437,47 @@ export class Workspace {
     }
     const summary = normalizeSummary(input.summary, `批量修改 ${edits.length} 个编制`);
 
+    // Additional read-only revision guards (e.g. cross-document clone sources).
+    // They are checked in the same atomic commit and never grant write access.
+    let guards = [];
+    if (input.guards !== undefined) {
+      if (!Array.isArray(input.guards)) {
+        throw new OrbatError('invalid_request', 'guards 必须是数组', {});
+      }
+      const seenGuards = new Set();
+      guards = input.guards.map((guard, index) => {
+        if (!isPlainObject(guard)) {
+          throw new OrbatError('invalid_request', `guards[${index}] 必须是普通对象`, { index });
+        }
+        if (typeof guard.documentId !== 'string' || guard.documentId.length === 0) {
+          throw new OrbatError('invalid_request', `guards[${index}].documentId 非法`, { index });
+        }
+        if (seenGuards.has(guard.documentId)) {
+          throw new OrbatError('invalid_request', `guards 中重复的编制: ${guard.documentId}`, {
+            documentId: guard.documentId,
+          });
+        }
+        seenGuards.add(guard.documentId);
+        if (!Number.isSafeInteger(guard.expectedRevision) || guard.expectedRevision < 1) {
+          throw new OrbatError('invalid_request', `guards[${index}].expectedRevision 非法`, {
+            index,
+          });
+        }
+        return { documentId: guard.documentId, expectedRevision: guard.expectedRevision };
+      });
+    }
+
     return this.#enqueue(async () => {
       const originals = new Map(this.#state.documents.map((document) => [document.id, document]));
       const working = new Map();
+
+      for (const guard of guards) {
+        const guarded = originals.get(guard.documentId);
+        if (!guarded) throw notFound('document', guard.documentId);
+        if (guarded.revision !== guard.expectedRevision) {
+          throw conflictError(guarded, guard.expectedRevision);
+        }
+      }
 
       for (const edit of edits) {
         const original = originals.get(edit.documentId);
@@ -1430,7 +1522,13 @@ export class Workspace {
           };
           working.set(edit.documentId, entry);
         }
-        applyOperations(entry.document, edit.operations, edit.documentId, entry.diffs);
+        applyOperations(
+          entry.document,
+          edit.operations,
+          edit.documentId,
+          entry.diffs,
+          this.#state.resources,
+        );
       }
 
       const changedDocuments = [];
