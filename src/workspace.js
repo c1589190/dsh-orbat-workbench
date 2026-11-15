@@ -19,7 +19,16 @@ export { OrbatError } from './model.js';
 export const WORKSPACE_FILE = 'workspace.json';
 export const HISTORY_LIMIT = 500;
 
-const STATE_VERSION = 1;
+const STATE_VERSION = 2;
+const READABLE_STATE_VERSIONS = new Set([1, STATE_VERSION]);
+const CATALOG_VERSION = 1;
+const TEMPLATES_VERSION = 1;
+const MAX_JSON_DEPTH = 8;
+const MAX_JSON_NODES = 1000;
+const MAX_JSON_STRING = 2000;
+const MAX_CATALOG_ENTRIES = 2000;
+const MAX_TEMPLATES = 200;
+const MAX_EQUIPMENT_ALIASES = 16;
 const APP_NAME = '军队编制编辑器';
 const MAX_DOCUMENT_NAME = 200;
 const MAX_SUMMARY_LENGTH = 500;
@@ -34,6 +43,18 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function emptyCatalog() {
+  return { version: CATALOG_VERSION, equip: {} };
+}
+
+function emptyTemplates() {
+  return { version: TEMPLATES_VERSION, items: {} };
+}
+
+function emptyResources() {
+  return { revision: 0, catalog: emptyCatalog(), templates: emptyTemplates() };
+}
+
 function emptyState() {
   return {
     version: STATE_VERSION,
@@ -41,6 +62,7 @@ function emptyState() {
     droppedThrough: 0,
     documents: [],
     changes: [],
+    resources: emptyResources(),
   };
 }
 
@@ -333,22 +355,6 @@ function applyOperations(document, operations, documentId, diffs) {
   }
 }
 
-function assertNoCustomEquipment(equip) {
-  if (equip === undefined || equip === null) return;
-  if (Array.isArray(equip)) {
-    if (equip.length === 0) return;
-  } else if (isPlainObject(equip)) {
-    if (Object.keys(equip).length === 0) return;
-  } else {
-    throw new OrbatError('invalid_payload', 'equip 必须是空对象或空数组', {});
-  }
-  throw new OrbatError(
-    'unsupported_equipment',
-    '暂不支持非空的自定义装备表 equip；节点内 equipment 暂不受影响',
-    {},
-  );
-}
-
 const EXPORT_NODE_KEYS = new Set([...NODE_FIELDS, 'id']);
 const EXPORT_EQUIPMENT_KEYS = new Set(['name', 'count', 'countMax', 'id']);
 
@@ -414,6 +420,395 @@ function isSafeCounter(value) {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
+function invalidCatalog(message, details = {}) {
+  return new OrbatError('invalid_catalog', message, details);
+}
+
+function invalidTemplates(message, details = {}) {
+  return new OrbatError('invalid_templates', message, details);
+}
+
+/** Deep-clone and validate a JSON value for catalog/template extras. */
+function normalizeSafeJson(value, label, state = { nodes: 0 }, depth = 0) {
+  if (depth > MAX_JSON_DEPTH) {
+    throw invalidCatalog(`${label} 嵌套过深`, { field: label, maxDepth: MAX_JSON_DEPTH });
+  }
+  state.nodes += 1;
+  if (state.nodes > MAX_JSON_NODES) {
+    throw invalidCatalog(`${label} 过大`, { field: label, maxNodes: MAX_JSON_NODES });
+  }
+  if (value === null || typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    if (value.length > MAX_JSON_STRING) {
+      throw invalidCatalog(`${label} 字符串过长`, { field: label, maxLength: MAX_JSON_STRING });
+    }
+    return value;
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw invalidCatalog(`${label} 必须是有限数字`, { field: label });
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry, index) => normalizeSafeJson(entry, `${label}[${index}]`, state, depth + 1));
+  }
+  if (!isPlainObject(value)) {
+    throw invalidCatalog(`${label} 不是 JSON 值`, { field: label });
+  }
+  assertSafeKeys(value, label);
+  const result = {};
+  for (const key of Object.keys(value)) {
+    setOwn(result, key, normalizeSafeJson(value[key], `${label}.${key}`, state, depth + 1));
+  }
+  return result;
+}
+
+function catalogLabels(item) {
+  return [item.name, ...(item.aliases ?? [])];
+}
+
+function normalizeCatalog(value) {
+  if (!isPlainObject(value)) throw invalidCatalog('catalog 必须是普通对象');
+  if (value.version !== CATALOG_VERSION) {
+    throw invalidCatalog(`不支持 catalog 版本: ${String(value.version)}`, { version: value.version });
+  }
+  if (!isPlainObject(value.equip)) throw invalidCatalog('catalog.equip 必须是普通对象');
+  assertSafeKeys(value.equip, 'catalog.equip');
+  const ids = Object.keys(value.equip);
+  if (ids.length > MAX_CATALOG_ENTRIES) {
+    throw invalidCatalog(`装备目录超过 ${MAX_CATALOG_ENTRIES} 项`, { count: ids.length });
+  }
+
+  const catalog = emptyCatalog();
+  const labels = new Map();
+  for (const id of ids) {
+    const raw = value.equip[id];
+    if (!isPlainObject(raw)) throw invalidCatalog(`catalog.equip.${id} 必须是对象`);
+    const itemId = raw.id === undefined ? id : raw.id;
+    if (typeof itemId !== 'string' || itemId.length === 0 || itemId !== id) {
+      throw invalidCatalog(`catalog.equip.${id}.id 必须是键本身`, { equipmentId: id });
+    }
+    if (typeof raw.name !== 'string') throw invalidCatalog(`catalog.equip.${id}.name 非法`);
+    const name = raw.name.trim();
+    if (name.length === 0 || name.length > 200) {
+      throw invalidCatalog(`catalog.equip.${id}.name 长度非法`, { equipmentId: id });
+    }
+
+    const aliases = [];
+    if (raw.aliases !== undefined) {
+      if (!Array.isArray(raw.aliases)) throw invalidCatalog(`catalog.equip.${id}.aliases 必须是数组`);
+      if (raw.aliases.length > MAX_EQUIPMENT_ALIASES) {
+        throw invalidCatalog(`catalog.equip.${id}.aliases 过多`, { max: MAX_EQUIPMENT_ALIASES });
+      }
+      for (const alias of raw.aliases) {
+        if (typeof alias !== 'string') throw invalidCatalog(`catalog.equip.${id}.aliases 必须是字符串`);
+        const normalized = alias.trim();
+        if (normalized.length === 0 || normalized.length > 100) {
+          throw invalidCatalog(`catalog.equip.${id} 别名长度非法`, { alias });
+        }
+        if (aliases.includes(normalized)) {
+          throw new OrbatError('catalog_conflict', `同一装备内别名重复: ${normalized}`, {
+            equipmentId: id,
+            label: normalized,
+          });
+        }
+        aliases.push(normalized);
+      }
+    }
+
+    const item = { id: itemId, name };
+    if (aliases.length > 0) item.aliases = aliases;
+    if (raw.category !== undefined) {
+      if (typeof raw.category !== 'string' || raw.category.trim().length === 0 ||
+          raw.category.length > 100) {
+        throw invalidCatalog(`catalog.equip.${id}.category 非法`, { equipmentId: id });
+      }
+      item.category = raw.category.trim();
+    }
+    if (raw.stats !== undefined) {
+      if (!isPlainObject(raw.stats)) throw invalidCatalog(`catalog.equip.${id}.stats 必须是对象`);
+      item.stats = normalizeSafeJson(raw.stats, `catalog.equip.${id}.stats`);
+    }
+    for (const key of Object.keys(raw)) {
+      if (key === 'id' || key === 'name' || key === 'aliases' || key === 'category' ||
+          key === 'stats') {
+        continue;
+      }
+      setOwn(item, key, normalizeSafeJson(raw[key], `catalog.equip.${id}.${key}`));
+    }
+
+    for (const label of catalogLabels(item)) {
+      if (labels.has(label)) {
+        throw new OrbatError('catalog_conflict', `装备名称或别名重复: ${label}`, {
+          label,
+          equipmentIds: [labels.get(label), id],
+        });
+      }
+      labels.set(label, id);
+    }
+    setOwn(catalog.equip, id, item);
+  }
+  return catalog;
+}
+
+function normalizeTemplates(value) {
+  if (!isPlainObject(value)) throw invalidTemplates('templates 必须是普通对象');
+  if (value.version !== TEMPLATES_VERSION) {
+    throw invalidTemplates(`不支持 templates 版本: ${String(value.version)}`, {
+      version: value.version,
+    });
+  }
+  if (!isPlainObject(value.items)) throw invalidTemplates('templates.items 必须是普通对象');
+  assertSafeKeys(value.items, 'templates.items');
+  const ids = Object.keys(value.items);
+  if (ids.length > MAX_TEMPLATES) {
+    throw invalidTemplates(`模板超过 ${MAX_TEMPLATES} 项`, { count: ids.length });
+  }
+
+  const templates = emptyTemplates();
+  for (const id of ids) {
+    const raw = value.items[id];
+    if (!isPlainObject(raw)) throw invalidTemplates(`templates.items.${id} 必须是对象`);
+    const itemId = raw.id === undefined ? id : raw.id;
+    if (typeof itemId !== 'string' || itemId.length === 0 || itemId !== id) {
+      throw invalidTemplates(`templates.items.${id}.id 必须是键本身`, { templateId: id });
+    }
+    if (typeof raw.name !== 'string') throw invalidTemplates(`templates.items.${id}.name 非法`);
+    const name = raw.name.trim();
+    if (name.length === 0 || name.length > 200) {
+      throw invalidTemplates(`templates.items.${id}.name 长度非法`, { templateId: id });
+    }
+    if (!isPlainObject(raw.root)) throw invalidTemplates(`templates.items.${id}.root 非法`);
+    let root;
+    try {
+      // Native round-trips keep template node ids; brand-new templates from the
+      // editor usually have no ids yet, so they get fresh internal ones.
+      if (typeof raw.root.id === 'string' && raw.root.id.length > 0) {
+        validateRoot(raw.root, { requireIds: true });
+        root = clone(raw.root);
+      } else {
+        root = normalizeRoot(raw.root);
+      }
+    } catch (error) {
+      throw invalidTemplates(`templates.items.${id}.root 非法: ${error.message}`, {
+        templateId: id,
+        cause: error instanceof OrbatError ? error.code : String(error),
+      });
+    }
+    setOwn(templates.items, id, { id: itemId, name, root });
+  }
+  return templates;
+}
+
+function normalizeResources(value) {
+  if (!isPlainObject(value)) throw corruptWorkspace('resources 必须是普通对象');
+  if (!isSafeCounter(value.revision)) throw corruptWorkspace('resources.revision 非法');
+  let catalog;
+  let templates;
+  try {
+    catalog = normalizeCatalog(value.catalog);
+  } catch (error) {
+    throw corruptWorkspace('resources.catalog 非法', {
+      cause: error instanceof OrbatError ? error.code : String(error),
+      message: error.message,
+    });
+  }
+  try {
+    templates = normalizeTemplates(value.templates);
+  } catch (error) {
+    throw corruptWorkspace('resources.templates 非法', {
+      cause: error instanceof OrbatError ? error.code : String(error),
+      message: error.message,
+    });
+  }
+  return { revision: value.revision, catalog, templates };
+}
+
+function mergeCatalogs(current, incoming) {
+  if (!incoming) return current;
+  const merged = clone(current);
+  const labels = new Map();
+  for (const [id, item] of Object.entries(current.equip)) {
+    for (const label of catalogLabels(item)) labels.set(label, id);
+  }
+  for (const [id, item] of Object.entries(incoming.equip)) {
+    if (Object.hasOwn(merged.equip, id)) {
+      throw new OrbatError('catalog_conflict', `装备 id 已存在: ${id}`, { equipmentId: id });
+    }
+    for (const label of catalogLabels(item)) {
+      if (labels.has(label)) {
+        throw new OrbatError('catalog_conflict', `装备名称或别名已存在: ${label}`, {
+          label,
+          equipmentId: id,
+        });
+      }
+      labels.set(label, id);
+    }
+    setOwn(merged.equip, id, clone(item));
+  }
+  return merged;
+}
+
+function mergeTemplates(current, incoming) {
+  if (!incoming) return current;
+  const merged = clone(current);
+  for (const [id, item] of Object.entries(incoming.items)) {
+    if (Object.hasOwn(merged.items, id)) {
+      throw new OrbatError('template_conflict', `模板 id 已存在: ${id}`, { templateId: id });
+    }
+    setOwn(merged.items, id, clone(item));
+  }
+  return merged;
+}
+
+/** Convert an upstream `equip` library object into the workbench catalog. */
+function catalogFromUpstreamEquip(equip) {
+  if (equip === undefined || equip === null) return null;
+  if (Array.isArray(equip)) {
+    if (equip.length === 0) return null;
+    throw new OrbatError('invalid_payload', 'equip 非空时必须是按 id 索引的对象', {});
+  }
+  if (!isPlainObject(equip)) {
+    throw new OrbatError('invalid_payload', 'equip 必须是对象或空数组', {});
+  }
+  if (Object.keys(equip).length === 0) return null;
+  const mapped = {};
+  for (const [key, raw] of Object.entries(equip)) {
+    if (!isPlainObject(raw)) {
+      throw new OrbatError('invalid_payload', `equip.${key} 必须是对象`, {});
+    }
+    const id = raw.id === undefined ? key : raw.id;
+    if (typeof id !== 'string' || id.length === 0 || id !== key) {
+      throw new OrbatError('invalid_payload', `equip.${key}.id 与键不一致`, {});
+    }
+    if (typeof raw.name !== 'string' || raw.name.trim() === '') {
+      throw new OrbatError('invalid_payload', `equip.${key}.name 非法`, {});
+    }
+    const item = { id, name: raw.name };
+    if (raw.aliases !== undefined) item.aliases = raw.aliases;
+    if (raw.category !== undefined) item.category = raw.category;
+    if (raw.stats !== undefined) item.stats = raw.stats;
+    for (const field of Object.keys(raw)) {
+      if (field === 'id' || field === 'name' || field === 'aliases' ||
+          field === 'category' || field === 'stats') {
+        continue;
+      }
+      item[field] = raw[field];
+    }
+    setOwn(mapped, key, item);
+  }
+  return normalizeCatalog({ version: CATALOG_VERSION, equip: mapped });
+}
+
+/** Project the workbench catalog into the upstream versionless `equip` map. */
+function catalogToUpstreamEquip(catalog) {
+  const equip = {};
+  for (const [id, item] of Object.entries(catalog.equip)) {
+    const value = { id, name: item.name };
+    if (item.category !== undefined) value.category = item.category;
+    if (item.stats !== undefined) value.stats = clone(item.stats);
+    for (const key of Object.keys(item)) {
+      if (key === 'id' || key === 'name' || key === 'aliases' || key === 'category' ||
+          key === 'stats') {
+        continue;
+      }
+      setOwn(value, key, clone(item[key]));
+    }
+    setOwn(equip, id, value);
+  }
+  return equip;
+}
+
+function mapNodeIds(original, normalized, mapping) {
+  mapping[original.id] = normalized.id;
+  for (let index = 0; index < original.children.length; index += 1) {
+    mapNodeIds(original.children[index], normalized.children[index], mapping);
+  }
+}
+
+function walkNodes(root, callback) {
+  callback(root);
+  for (const child of root.children) walkNodes(child, callback);
+}
+
+const EXPORT_EQUIPMENT_KEYS_FOR_LOSS = new Set(['name', 'count', 'countMax', 'id', 'orbat']);
+
+function describeCompatibilityLosses(documents, resources, format) {
+  const losses = [];
+  let nodeIds = 0;
+  let extensionFields = 0;
+  let evidenceFields = 0;
+  for (const document of documents) {
+    walkNodes(document.root, (node) => {
+      nodeIds += 1;
+      if (node.custom !== undefined) extensionFields += 1;
+      if (node.custom?.orbat?.version === 1) evidenceFields += 1;
+      for (const item of node.equipment) {
+        if (item.orbat !== undefined) evidenceFields += 1;
+        if (Object.keys(item).some((key) => !EXPORT_EQUIPMENT_KEYS_FOR_LOSS.has(key))) {
+          extensionFields += 1;
+        }
+      }
+      if (Object.keys(node).some((key) => !NODE_FIELDS.includes(key) && key !== 'id' &&
+          key !== 'children' && key !== 'custom')) {
+        extensionFields += 1;
+      }
+    });
+  }
+
+  losses.push({
+    code: 'internal-node-ids',
+    count: nodeIds,
+    message: '兼容文件不包含内部节点 id；重新导入会生成新 id',
+  });
+  if (nodeIds > 0) {
+    losses.push({
+      code: 'history',
+      message: '兼容文件不包含修订历史、sequence 或资源修订',
+    });
+  }
+  if (extensionFields > 0) {
+    losses.push({
+      code: 'extension-metadata',
+      count: extensionFields,
+      message: '上游编辑器不保证保留未知扩展字段，不能承诺往返无损',
+    });
+  }
+  if (evidenceFields > 0) {
+    losses.push({
+      code: 'evidence-metadata',
+      count: evidenceFields,
+      message: '字段级来源与数量状态不保证被上游保留',
+    });
+  }
+  const templateCount = Object.keys(resources.templates.items).length;
+  if (templateCount > 0) {
+    losses.push({ code: 'templates', count: templateCount, message: '兼容格式不包含模板' });
+  }
+  const catalogCount = Object.keys(resources.catalog.equip).length;
+  if (catalogCount > 0) {
+    if (format === 'mil-org') {
+      losses.push({
+        code: 'equipment-catalog',
+        count: catalogCount,
+        message: 'mil-org 不包含装备目录',
+      });
+    } else {
+      const aliasCount = Object.values(resources.catalog.equip)
+        .reduce((total, item) => total + (item.aliases?.length ?? 0), 0);
+      if (aliasCount > 0) {
+        losses.push({
+          code: 'equipment-aliases',
+          count: aliasCount,
+          message: '上游装备库没有别名概念',
+        });
+      }
+    }
+  }
+  return losses.sort((left, right) => left.code.localeCompare(right.code));
+}
+
 function parseState(text) {
   let raw;
   try {
@@ -423,7 +818,7 @@ function parseState(text) {
   }
   if (!isPlainObject(raw)) throw corruptWorkspace('工作区文件根必须是对象');
   assertSafeKeys(raw, 'workspace');
-  if (raw.version !== STATE_VERSION) {
+  if (!READABLE_STATE_VERSIONS.has(raw.version)) {
     throw corruptWorkspace(`不支持的工作区版本: ${String(raw.version)}`, { version: raw.version });
   }
   if (!isSafeCounter(raw.sequence)) throw corruptWorkspace('sequence 非法');
@@ -499,6 +894,9 @@ function parseState(text) {
     droppedThrough,
     documents,
     changes,
+    resources: raw.version === 1
+      ? emptyResources()
+      : normalizeResources(raw.resources),
   };
 }
 
@@ -556,7 +954,7 @@ export class Workspace {
     return run;
   }
 
-  #buildState(documents, sequence, change) {
+  #buildState(documents, sequence, change, resources = this.#state.resources) {
     const changes = [...this.#state.changes, change];
     let droppedThrough = this.#state.droppedThrough;
     while (changes.length > HISTORY_LIMIT) {
@@ -569,6 +967,7 @@ export class Workspace {
       droppedThrough,
       documents,
       changes,
+      resources,
     };
   }
 
@@ -628,6 +1027,284 @@ export class Workspace {
       documents: this.#state.documents.map(publicDocument),
       changes: this.#state.changes.map((change) => clone(change)),
     };
+  }
+
+  resources() {
+    return clone(this.#state.resources);
+  }
+
+  async updateResources(input, actor) {
+    const normalizedActor = normalizeActor(actor);
+    if (!isPlainObject(input)) {
+      throw new OrbatError('invalid_request', 'updateResources 参数必须是普通对象', {});
+    }
+    if (!isSafeCounter(input.expectedRevision)) {
+      throw new OrbatError('invalid_request', 'expectedRevision 必须是非负整数', {
+        expectedRevision: input.expectedRevision,
+      });
+    }
+    const hasCatalog = Object.hasOwn(input, 'catalog') && input.catalog !== undefined;
+    const hasTemplates = Object.hasOwn(input, 'templates') && input.templates !== undefined;
+    if (!hasCatalog && !hasTemplates) {
+      throw new OrbatError('invalid_request', '至少提供 catalog 或 templates', {});
+    }
+    const catalog = hasCatalog ? normalizeCatalog(input.catalog) : null;
+    const templates = hasTemplates ? normalizeTemplates(input.templates) : null;
+    const summary = normalizeSummary(input.summary, '更新装备目录与模板');
+
+    return this.#enqueue(async () => {
+      if (this.#state.resources.revision !== input.expectedRevision) {
+        throw new OrbatError('resource_conflict', '资源修订已过期，请重新读取', {
+          expectedRevision: input.expectedRevision,
+          revision: this.#state.resources.revision,
+        });
+      }
+      const sequence = this.#state.sequence + 1;
+      const resources = {
+        revision: this.#state.resources.revision + 1,
+        catalog: catalog ?? this.#state.resources.catalog,
+        templates: templates ?? this.#state.resources.templates,
+      };
+      const change = {
+        sequence,
+        time: nowIso(),
+        actor: normalizedActor,
+        summary,
+        documents: [],
+        diffs: [],
+      };
+      const nextState = this.#buildState(this.#state.documents, sequence, change, resources);
+      await this.#persist(nextState);
+      this.#state = nextState;
+      this.#notify(change);
+      return {
+        ok: true,
+        resources: clone(resources),
+        sequence,
+        change: clone(change),
+      };
+    });
+  }
+
+  exportNative(documentIds) {
+    const fullWorkspace = documentIds === undefined || documentIds === null;
+    let ids;
+    if (fullWorkspace) {
+      ids = this.#state.documents.map((document) => document.id);
+    } else {
+      if (!Array.isArray(documentIds) || documentIds.length === 0) {
+        throw new OrbatError('invalid_request', 'documentIds 必须是非空数组', {});
+      }
+      const seen = new Set();
+      ids = documentIds.map((id) => {
+        if (typeof id !== 'string' || id.length === 0) {
+          throw new OrbatError('invalid_request', 'documentIds 只能包含非空字符串', {});
+        }
+        if (seen.has(id)) {
+          throw new OrbatError('invalid_request', 'documentIds 不能重复', { documentId: id });
+        }
+        seen.add(id);
+        return id;
+      });
+    }
+    const byId = new Map(this.#state.documents.map((document) => [document.id, document]));
+    const documents = ids.map((id) => {
+      const document = byId.get(id);
+      if (!document) throw notFound('document', id);
+      return publicDocument(document);
+    });
+    const payload = {
+      kind: 'orbat-native',
+      version: 1,
+      sequence: this.#state.sequence,
+      documents,
+      catalog: clone(this.#state.resources.catalog),
+      templates: clone(this.#state.resources.templates),
+      losses: [],
+    };
+    if (fullWorkspace) {
+      // A full-workspace native backup carries the bounded change history as
+      // well; import currently restores documents/resources only and says so.
+      payload.changes = clone(this.#state.changes);
+      payload.droppedThrough = this.#state.droppedThrough;
+    } else {
+      payload.losses.push({
+        code: 'history-omitted',
+        message: '选择性原生导出不包含工作区修订历史',
+      });
+    }
+    return payload;
+  }
+
+  async importNative(payload, options = {}, actor) {
+    const normalizedActor = normalizeActor(actor);
+    if (options === undefined) options = {};
+    if (!isPlainObject(options)) {
+      throw new OrbatError('invalid_request', 'options 必须是普通对象', {});
+    }
+    const mode = options.mode === undefined ? 'merge' : options.mode;
+    if (mode !== 'merge' && mode !== 'clone') {
+      throw new OrbatError('invalid_request', 'mode 必须是 merge 或 clone', { mode });
+    }
+
+    let source = payload;
+    if (typeof source === 'string') {
+      try {
+        source = JSON.parse(source);
+      } catch (error) {
+        throw new OrbatError('invalid_payload', '原生导入内容不是合法 JSON', {
+          reason: error.message,
+        });
+      }
+    }
+    if (!isPlainObject(source)) {
+      throw new OrbatError('invalid_payload', '原生导入内容必须是对象', {});
+    }
+    assertSafeKeys(source, 'payload');
+    if (source.kind !== 'orbat-native' || source.version !== 1) {
+      throw new OrbatError('invalid_payload', 'kind 或 version 非法', {
+        kind: source.kind,
+        version: source.version,
+      });
+    }
+    if (!Array.isArray(source.documents) || source.documents.length === 0) {
+      throw new OrbatError('invalid_payload', 'documents 必须是非空数组', {});
+    }
+    const catalogIncoming = source.catalog === undefined ? null : normalizeCatalog(source.catalog);
+    const templatesIncoming = source.templates === undefined
+      ? null
+      : normalizeTemplates(source.templates);
+
+    const seen = new Set();
+    const prepared = source.documents.map((raw, index) => {
+      const at = `documents[${index}]`;
+      if (!isPlainObject(raw)) {
+        throw new OrbatError('invalid_payload', `${at} 必须是对象`, {});
+      }
+      if (typeof raw.id !== 'string' || raw.id.length === 0) {
+        throw new OrbatError('invalid_payload', `${at}.id 非法`, {});
+      }
+      if (seen.has(raw.id)) {
+        throw new OrbatError('invalid_payload', `重复的编制 id: ${raw.id}`, { id: raw.id });
+      }
+      seen.add(raw.id);
+      if (typeof raw.name !== 'string' || raw.name.trim() === '' ||
+          raw.name.trim().length > MAX_DOCUMENT_NAME) {
+        throw new OrbatError('invalid_payload', `${at}.name 非法`, {});
+      }
+      if (!isSafeCounter(raw.revision) || raw.revision < 1) {
+        throw new OrbatError('invalid_payload', `${at}.revision 非法`, {});
+      }
+      if (!isPlainObject(raw.root)) {
+        throw new OrbatError('invalid_payload', `${at}.root 非法`, {});
+      }
+      try {
+        validateRoot(raw.root, { requireIds: true });
+      } catch (error) {
+        throw new OrbatError('invalid_payload', `${at}.root 非法: ${error.message}`, {
+          cause: error instanceof OrbatError ? error.code : String(error),
+        });
+      }
+      return {
+        id: raw.id,
+        name: raw.name.trim(),
+        revision: raw.revision,
+        root: raw.root,
+      };
+    });
+
+    const clones = mode === 'clone'
+      ? prepared.map((document) => {
+        const mapping = {};
+        const root = normalizeRoot(document.root);
+        mapNodeIds(document.root, root, mapping);
+        return { oldId: document.id, name: document.name, root, mapping };
+      })
+      : null;
+
+    return this.#enqueue(async () => {
+      const usedIds = new Set(this.#state.documents.map((document) => document.id));
+      const nextDocuments = [...this.#state.documents];
+      const changeDocuments = [];
+      const idMap = { documents: {}, nodes: {} };
+
+      if (mode === 'merge') {
+        for (const document of prepared) {
+          if (usedIds.has(document.id)) {
+            throw new OrbatError('conflict', `编制 id 已存在: ${document.id}`, {
+              documentId: document.id,
+            });
+          }
+        }
+        for (const document of prepared) {
+          const copy = {
+            id: document.id,
+            name: document.name,
+            revision: document.revision,
+            root: clone(document.root),
+          };
+          nextDocuments.push(copy);
+          usedIds.add(copy.id);
+          changeDocuments.push({
+            id: copy.id,
+            beforeRevision: 0,
+            afterRevision: copy.revision,
+          });
+          idMap.documents[copy.id] = copy.id;
+          walkNodes(copy.root, (node) => {
+            idMap.nodes[node.id] = node.id;
+          });
+        }
+      } else {
+        for (const document of clones) {
+          const id = newDocumentId(usedIds);
+          nextDocuments.push({ id, name: document.name, revision: 1, root: document.root });
+          changeDocuments.push({ id, beforeRevision: 0, afterRevision: 1 });
+          idMap.documents[document.oldId] = id;
+          Object.assign(idMap.nodes, document.mapping);
+        }
+      }
+
+      const resources = {
+        revision: this.#state.resources.revision,
+        catalog: mergeCatalogs(this.#state.resources.catalog, catalogIncoming),
+        templates: mergeTemplates(this.#state.resources.templates, templatesIncoming),
+      };
+      if (catalogIncoming || templatesIncoming) resources.revision += 1;
+
+      const sequence = this.#state.sequence + 1;
+      const change = {
+        sequence,
+        time: nowIso(),
+        actor: normalizedActor,
+        summary: `原生导入 ${prepared.length} 份编制`,
+        documents: changeDocuments,
+        diffs: [],
+      };
+      const nextState = this.#buildState(nextDocuments, sequence, change, resources);
+      await this.#persist(nextState);
+      this.#state = nextState;
+      this.#notify(change);
+
+      const importedIds = new Set(changeDocuments.map((document) => document.id));
+      return {
+        ok: true,
+        documents: nextState.documents
+          .filter((document) => importedIds.has(document.id))
+          .map(publicDocument),
+        sequence,
+        change: clone(change),
+        idMap,
+        losses: [
+          ...(Array.isArray(source.changes) && source.changes.length > 0
+            ? [{ code: 'history-ignored', message: '原生导入不恢复工作区级修订历史' }]
+            : []),
+          ...(mode === 'clone'
+            ? [{ code: 'identity-remapped', message: '克隆导入重新生成了文档与节点 id' }]
+            : []),
+        ],
+      };
+    });
   }
 
   async create(input, actor) {
@@ -827,10 +1504,12 @@ export class Workspace {
       throw new OrbatError('invalid_payload', '导入内容必须是 JSON 对象', {});
     }
     assertSafeKeys(source, 'payload');
+    const catalogIncoming = source.kind === 'mil-org' || source.kind === 'mil-bundle'
+      ? catalogFromUpstreamEquip(source.equip)
+      : null;
 
     const inputs = [];
     if (source.kind === 'mil-org') {
-      assertNoCustomEquipment(source.equip);
       if (!isPlainObject(source.data)) {
         throw new OrbatError('invalid_payload', 'mil-org.data 必须是编制树', {});
       }
@@ -839,7 +1518,6 @@ export class Workspace {
         root: source.data,
       });
     } else if (source.kind === 'mil-bundle') {
-      assertNoCustomEquipment(source.equip);
       if (!isPlainObject(source.saves)) {
         throw new OrbatError('invalid_payload', 'mil-bundle.saves 必须是对象', {});
       }
@@ -889,6 +1567,10 @@ export class Workspace {
         root,
       }));
       const sequence = this.#state.sequence + 1;
+      const catalog = mergeCatalogs(this.#state.resources.catalog, catalogIncoming);
+      const resources = catalogIncoming
+        ? { ...this.#state.resources, revision: this.#state.resources.revision + 1, catalog }
+        : this.#state.resources;
       const change = {
         sequence,
         time: nowIso(),
@@ -901,7 +1583,12 @@ export class Workspace {
         })),
         diffs: [],
       };
-      const nextState = this.#buildState([...this.#state.documents, ...documents], sequence, change);
+      const nextState = this.#buildState(
+        [...this.#state.documents, ...documents],
+        sequence,
+        change,
+        resources,
+      );
       await this.#persist(nextState);
       this.#state = nextState;
       this.#notify(change);
@@ -984,7 +1671,18 @@ export class Workspace {
       app: APP_NAME,
       time,
       saves,
-      equip: {},
+      equip: catalogToUpstreamEquip(this.#state.resources.catalog),
+    };
+  }
+
+  exportCompatible(documentIds, format = 'mil-org') {
+    if (format === undefined) format = 'mil-org';
+    const payload = this.export(documentIds, format);
+    const byId = new Map(this.#state.documents.map((document) => [document.id, document]));
+    const documents = documentIds.map((id) => byId.get(id));
+    return {
+      payload,
+      losses: describeCompatibilityLosses(documents, this.#state.resources, format),
     };
   }
 

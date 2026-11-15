@@ -1079,19 +1079,17 @@ test('import accepts mil-bundle saves including duplicate document names', async
   assert.equal(result.change.documents.length, 2);
 });
 
-test('import rejects non-empty custom equip and malformed payloads', async (t) => {
+test('import accepts a nonempty equipment library and rejects malformed payloads', async (t) => {
   const { workspace } = await fixture(t);
+  const imported = await workspace.import({
+    kind: 'mil-bundle',
+    version: 1,
+    saves: { 甲: { data: sampleRoot() } },
+    equip: { eq_1: { id: 'eq_1', name: '步枪', category: 'small_arms', stats: { damage: 1 } } },
+  }, HUMAN);
+  assert.equal(imported.documents.length, 1);
+  assert.equal(workspace.resources().catalog.equip.eq_1.name, '步枪');
   const before = workspace.snapshot();
-  await assert.rejects(
-    workspace.import({
-      kind: 'mil-bundle',
-      version: 1,
-      saves: { 甲: { data: sampleRoot() } },
-      equip: { 步枪: 1 },
-    }, HUMAN),
-    errCode('unsupported_equipment'),
-  );
-  assert.deepEqual(workspace.snapshot(), before);
 
   for (const payload of [
     null,
