@@ -1,6 +1,7 @@
 MIT License
 
 Copyright (c) 2026 M.Hikari
+Copyright (c) 2026 ORBAT Workbench contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,3 +20,10 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+The MIT grant above applies to ORBAT Workbench contributors' own contributions.
+Third-party material, including the Army_Editor-derived editor-style preview,
+is not licensed by the above grant. The upstream repository has no verified
+standard license; its stated author and conditions are recorded in
+https://github.com/xgua126/Army_Editor and docs/THIRD_PARTY.md.
+Third-party runtime dependencies retain their own licenses.

@@ -1,0 +1,57 @@
+{
+  "name": "@local/dsh-orbat-workbench",
+  "version": "0.0.1",
+  "private": true,
+  "license": "MIT",
+  "description": "Experimental multi-army human–AI collaborative order-of-battle workbench for DSH",
+  "type": "module",
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.2-rc.3 <0.3.0"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "src",
+    "scripts",
+    "tests",
+    "skills",
+    "locale",
+    "icon.svg",
+    "cordis.patch.yml",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "build": "node scripts/build-client.mjs",
+    "check": "node scripts/check.mjs",
+    "demo": "node scripts/demo.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "dependencies": {
+    "@resvg/resvg-js": "2.6.2",
+    "milsymbol": "3.0.5",
+    "yaml": "2.9.1"
+  }
+}

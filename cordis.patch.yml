@@ -1,0 +1,4 @@
+- insert:
+    - id: orbat-workbench
+      name: '@local/dsh-orbat-workbench'
+      config: {}
