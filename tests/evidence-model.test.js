@@ -6,6 +6,13 @@ import {
   normalizeRoot,
   stats,
 } from '../src/model.js';
+import {
+  computeCoverage,
+  isWorkbenchOrbat,
+  nodeEvidence,
+  normalizeItemEvidence,
+  normalizeNodeEvidence,
+} from '../src/evidence.js';
 
 // Contract source: docs/superpowers/plans/2026-11-15-orbat-game-workflow.md
 // "Common Contract" and Responsibility 1. This file is intentionally written
@@ -689,4 +696,127 @@ test('arbitrary custom namespaces and extra equipment item fields survive normal
   assert.equal(patch.equipment[0].nested.serial, 'B-2');
   assert.equal(patch.equipment[0].orbat.status, 'unknown');
   assert.deepEqual(patch.equipment[0].orbat.source, SOURCE);
+});
+
+// --- Prototype-chain safety ------------------------------------------------
+// Common Contract: "All fields and outputs must guard unsafe keys". Evidence
+// helpers and coverage must only read OWN `orbat` properties. An `orbat`
+// reached through the prototype chain is unrelated data: it must never be
+// validated, returned or aggregated.
+//
+// `Object.create({ orbat })` exercises inheritance from a non-`Object.prototype`
+// prototype. `withInheritedOrbat` additionally exercises the prototype-pollution
+// shape (plain object inheriting `orbat` from `Object.prototype` itself), which a
+// strict `isPlainObject` gate alone does not stop. The own-property controls keep
+// each test from passing vacuously against a helper that always says "no evidence".
+
+function withInheritedOrbat(value, fn) {
+  Object.defineProperty(Object.prototype, 'orbat', {
+    configurable: true,
+    enumerable: false,
+    writable: true,
+    value,
+  });
+  try {
+    return fn();
+  } finally {
+    delete Object.prototype.orbat;
+  }
+}
+
+test('isWorkbenchOrbat only treats an own versioned orbat namespace as workbench evidence', () => {
+  assert.equal(
+    isWorkbenchOrbat({ orbat: { version: 1 } }),
+    true,
+    'own-property control: a plain workbench orbat namespace is evidence',
+  );
+  assert.equal(
+    isWorkbenchOrbat(Object.create({ orbat: { version: 1 } })),
+    false,
+    'an orbat namespace inherited from a custom prototype is not workbench evidence',
+  );
+  assert.equal(
+    withInheritedOrbat({ version: 1 }, () => isWorkbenchOrbat({})),
+    false,
+    'an orbat namespace inherited from Object.prototype is not workbench evidence',
+  );
+});
+
+test('normalizeNodeEvidence ignores inherited orbat evidence instead of validating it', () => {
+  const inherited = Object.create({
+    orbat: { version: 1, personnel: { status: 'bogus-status' } },
+  });
+  assert.equal(
+    normalizeNodeEvidence(inherited),
+    inherited,
+    'a custom object with only an inherited orbat namespace must be returned untouched',
+  );
+
+  assert.doesNotThrow(
+    () => withInheritedOrbat(
+      { version: 1, personnel: { status: 'bogus-status' } },
+      () => normalizeNodeEvidence({}),
+    ),
+    'an orbat namespace inherited from Object.prototype must not be validated as evidence',
+  );
+});
+
+test('nodeEvidence returns null for orbat inherited through the prototype chain', () => {
+  assert.equal(
+    nodeEvidence({ custom: Object.create({ orbat: { version: 1 } }) }),
+    null,
+    'an orbat namespace inherited from a custom prototype is not node evidence',
+  );
+  assert.equal(
+    withInheritedOrbat({ version: 1 }, () => nodeEvidence({ custom: {} })),
+    null,
+    'an orbat namespace inherited from Object.prototype is not node evidence',
+  );
+});
+
+test('normalizeItemEvidence ignores inherited item evidence instead of validating it', () => {
+  const entry = Object.create({ orbat: { status: 'bogus-status' } });
+  let result;
+  assert.doesNotThrow(() => {
+    result = normalizeItemEvidence(entry);
+  }, 'an inherited item orbat must not be validated');
+  assert.equal(result, entry, 'an item with only an inherited orbat must be returned untouched');
+
+  const plain = withInheritedOrbat(
+    { status: 'bogus-status' },
+    () => normalizeItemEvidence({ name: '步枪', count: 5 }),
+  );
+  assert.deepEqual(
+    plain,
+    { name: '步枪', count: 5 },
+    'an item orbat inherited from Object.prototype must not be validated',
+  );
+});
+
+test('computeCoverage ignores inherited equipment item evidence', () => {
+  const item = Object.assign(
+    Object.create({ orbat: { status: 'unknown' } }),
+    { name: '步枪', count: 5 },
+  );
+  const root = { personnel: 0, equipment: [item], children: [] };
+
+  let coverage;
+  assert.doesNotThrow(() => {
+    coverage = computeCoverage(root);
+  }, 'computeCoverage must accept a raw tree whose item orbat is only inherited');
+  assert.equal(
+    coverage.equipment.unknown,
+    0,
+    'inherited item orbat.status must not count the item as unknown',
+  );
+  assert.equal(
+    coverage.equipment.estimated,
+    0,
+    'inherited item orbat.status must not count the item as estimated',
+  );
+  assert.equal(
+    coverage.equipment.legacyAmbiguous,
+    0,
+    'inherited item orbat.status must not make the item legacy-ambiguous',
+  );
 });

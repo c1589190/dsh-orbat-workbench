@@ -97,7 +97,7 @@ function validateEvidenceRecord(record, label) {
 
 /** True only for the versioned workbench namespace. */
 export function isWorkbenchOrbat(custom) {
-  if (!isPlainObject(custom)) return false;
+  if (!isPlainObject(custom) || !Object.hasOwn(custom, 'orbat')) return false;
   const orbat = custom.orbat;
   return isPlainObject(orbat) && orbat.version === WORKBENCH_ORBAT_VERSION;
 }
@@ -108,7 +108,7 @@ export function isWorkbenchOrbat(custom) {
  * an `orbat` namespace without `version: 1`, are returned untouched.
  */
 export function normalizeNodeEvidence(custom, label = 'custom') {
-  if (!isPlainObject(custom)) return custom;
+  if (!isPlainObject(custom) || !Object.hasOwn(custom, 'orbat')) return custom;
   const orbat = custom.orbat;
   if (!isPlainObject(orbat)) return custom;
   if (orbat.version !== WORKBENCH_ORBAT_VERSION) return custom;
@@ -138,25 +138,55 @@ export function normalizeItemEvidence(entry, label = 'equipment') {
   return entry;
 }
 
-/** Read the versioned evidence namespace of a normalized node, if any. */
+/**
+ * Read the versioned evidence namespace of a normalized node, if any. Evidence
+ * is only ever read from an OWN `custom.orbat`: an `orbat` reached through the
+ * prototype chain is unrelated data (prototype-pollution safety).
+ */
 export function nodeEvidence(node) {
   const custom = node?.custom;
-  if (!isPlainObject(custom)) return null;
+  if (!isPlainObject(custom) || !Object.hasOwn(custom, 'orbat')) return null;
   const orbat = custom.orbat;
   if (!isPlainObject(orbat) || orbat.version !== WORKBENCH_ORBAT_VERSION) return null;
   return orbat;
 }
 
 function itemEvidence(item) {
-  const orbat = item?.orbat;
+  // Item evidence is only an OWN, plain `orbat` object; inherited or malformed
+  // same-named values are unrelated data and never aggregated.
+  if (!isPlainObject(item) || !Object.hasOwn(item, 'orbat')) return null;
+  const orbat = item.orbat;
   return isPlainObject(orbat) ? orbat : null;
 }
 
 function coverageTotals() {
   return {
     personnel: { known: 0, unknown: 0, estimated: 0, legacyAmbiguous: 0 },
-    equipment: { unknown: 0, estimated: 0, legacyAmbiguous: 0 },
+    equipment: {
+      // Plain object (not a Map/null-prototype object) so the public shape stays
+      // JSON/deep-equal friendly; `__proto__`-like names are defined as own
+      // enumerable data properties instead of hitting the prototype setter.
+      known: {},
+      knownTotal: 0,
+      unknown: 0,
+      estimated: 0,
+      legacyAmbiguous: 0,
+    },
   };
+}
+
+/** Record a known equipment subtotal, safely even for names like `__proto__`. */
+function addKnown(equipmentCoverage, name, count) {
+  const previous = Object.hasOwn(equipmentCoverage.known, name)
+    ? equipmentCoverage.known[name]
+    : 0;
+  Object.defineProperty(equipmentCoverage.known, name, {
+    value: previous + count,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+  equipmentCoverage.knownTotal += count;
 }
 
 /**
@@ -169,10 +199,15 @@ function coverageTotals() {
  * unlabelled non-zero value is recorded legacy (known); an unlabelled zero is
  * ambiguous, never silently a real zero or an unknown.
  *
- * Equipment: unknown/legacy-ambiguous count affected items (or one for an
- * explicitly unknown list); estimate sums the item quantities. A status-less
- * zero item is ambiguous. `equipmentList.status: unknown` marks an empty or
- * partial list as unknown instead of "none".
+ * Equipment: `known` maps each equipment name to its known subtotal (`knownTotal`
+ * sums those subtotals). actual/standard quantities are known; estimate
+ * quantities are known and also sum into `estimated`; unknown items and
+ * legacy-ambiguous items count affected records and never contribute to
+ * `known`. A status-less non-zero item is recorded legacy (known); a
+ * status-less zero item is ambiguous, never a confirmed zero. A list-level
+ * `unknown`/`legacy-ambiguous` counts the list once (not per item), and an
+ * unannotated empty list is legacy-ambiguous rather than "none"; an explicitly
+ * actual/standard empty list is a known empty list.
  */
 export function computeCoverage(root) {
   const coverage = coverageTotals();
@@ -195,20 +230,31 @@ export function computeCoverage(root) {
       else coverage.personnel.legacyAmbiguous += 1;
     }
 
+    const equipmentCoverage = coverage.equipment;
     const listStatus = evidence?.equipmentList?.status;
-    if (listStatus === 'unknown') coverage.equipment.unknown += 1;
-    else if (listStatus === 'legacy-ambiguous') coverage.equipment.legacyAmbiguous += 1;
+    if (listStatus === 'unknown') {
+      equipmentCoverage.unknown += 1;
+    } else if (listStatus === 'legacy-ambiguous') {
+      equipmentCoverage.legacyAmbiguous += 1;
+    } else if (listStatus === undefined && node.equipment.length === 0) {
+      // No list evidence and nothing recorded: legacy ambiguity, not "none".
+      equipmentCoverage.legacyAmbiguous += 1;
+    }
 
     for (const item of node.equipment) {
       const status = itemEvidence(item)?.status;
-      if (status === 'unknown') {
-        coverage.equipment.unknown += 1;
+      if (status === 'actual' || status === 'standard') {
+        addKnown(equipmentCoverage, item.name, item.count);
       } else if (status === 'estimate') {
-        coverage.equipment.estimated += item.count;
+        addKnown(equipmentCoverage, item.name, item.count);
+        equipmentCoverage.estimated += item.count;
+      } else if (status === 'unknown') {
+        equipmentCoverage.unknown += 1;
       } else if (status === 'legacy-ambiguous') {
-        coverage.equipment.legacyAmbiguous += 1;
-      } else if (status === undefined && item.count === 0) {
-        coverage.equipment.legacyAmbiguous += 1;
+        equipmentCoverage.legacyAmbiguous += 1;
+      } else if (status === undefined) {
+        if (item.count > 0) addKnown(equipmentCoverage, item.name, item.count);
+        else equipmentCoverage.legacyAmbiguous += 1;
       }
     }
 

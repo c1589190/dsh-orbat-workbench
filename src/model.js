@@ -589,9 +589,14 @@ export function normalizeNodePatch(fields, { echelon } = {}) {
 /**
  * Recursively aggregate personnel and equipment counts. Personnel is the sum of
  * the direct personnel fields on every node in the tree (not just the root).
+ *
+ * The input may be a raw, model-legal tree with optional fields missing, so it
+ * is normalized exactly once here and every scalar is read from that normalized
+ * clone (never from the original, whose missing fields would yield NaN). The
+ * input is never mutated and the legacy scalar output is unchanged.
  */
 export function stats(root) {
-  validateRoot(root);
+  const normalized = normalizeRoot(root);
   const result = {
     personnel: 0,
     personnelMax: 0,
@@ -619,9 +624,9 @@ export function stats(root) {
     for (const child of node.children) walk(child);
   };
 
-  walk(root);
+  walk(normalized);
   // Additive completeness annotation: legacy scalar fields above stay exactly
   // as before, so old callers and exports keep working unchanged.
-  result.coverage = computeCoverage(root);
+  result.coverage = computeCoverage(normalized);
   return result;
 }
