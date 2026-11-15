@@ -1,5 +1,12 @@
 # Demo execution ledger
 
+## 2026-11-15 责任区6与交付（已完成，含未验证项）
+- 最终门禁：`pnpm run build` 成功；`node --test tests/*.test.js` **191/191**；`node scripts/check.mjs` rc=0；仅有 Node Undici experimental 警告。
+- 运行态核对：运行中的 Host 仍写 **workspace.json version 1**，`orbat_validate` 的 coverage 没有 `knownTotal`，本会话也没有 `orbat_plan/commit/resources` 工具。结论：运行中的后端/前端是旧版，责任区2–5 的新工具与 UI **需重启 Host 并刷新页面后才生效**；未重启、未另起服务、未改 profile。数据编辑只用了旧工具也支持的 `update` 事务。
+- 数据清理与填充：对 `d_ef73fd41-0094-483a-ad0e-61a849339471` 分三笔原子事务 revision 5→6→7→8（sequence 13–15），清空 147 个名称与 11 条 remark 中的“示意”，给 15 个师/团/独立营节点写入 `custom.orbat` estimate 来源，其余节点填写可玩估算；162 节点无 0 人节点，直属合计 8,490 人 / 2,183 件装备。原始 15 节点文档 revision 1 未动。资料说明见 `docs/SOVIET-4GTD-1988.md`。
+- 产物：`artifacts/d_ef73fd41-…-r8-editor.png`（师总览，截断 24/162）、`…-r8-n_af51544a-…-editor.png`（近卫第12坦克团 29/29）、`…-r8-n_d6a6ec78-…-list.png`（近卫第423摩步团 32/32）；`artifacts/armies-15-ef3cb6e3.json`（单份 mil-org）与 `artifacts/armies-15-c03b5f8f.json`（5 份 mil-bundle，目录为空）。图片已用 read_image 检查，导出文件已读取核对节点/人数/无内部 id。
+- 未验证/未做：真实浏览器视觉与点击、Army_Editor 网页导入往返、旧 Host 上的新 plan/commit/resources/损失报告、原生 exportNative/importNative 的实时调用、技能模型场景重跑。这些都不能宣称已完成。
+
 ## 2026-11-15 责任区4–5（已完成）
 - 责任区4（提交 `b4be51d`）：渲染器在画面标题标注“数据不完整”，未知直属人数在兵牌上显示 `人 ?`、列表显示 `本级 ? 人`，不向名称注入示意；网页显示每份编制的 coverage，新增结构化装备表（名称/数量/状态）、人数状态与来源、模板克隆入口，批量编辑改为“生成冻结预览 → 提交”，并新增 `tests/game-render.test.js`、`tests/game-ui.test.js` 及共享纯策略；`pnpm run build` 与 `scripts/check.mjs` 通过。GUI 未做浏览器视觉验收，不冒充。
 - 责任区5（本次提交）：重写内置 `skills/orbat-workbench/SKILL.md`，加入文游完整交付、名称不加示意、字段级证据/未知与 0、plan/commit、resources/templates、mergeCustom、原生备份与 lossReport、冲突与读图规则；更新 `docs/TOOLS.md` 与 README 的工具/目录/损失说明；新增 `tests/skill-content.test.js` 防止能力说明倒退。未重跑独立模型场景，技能行为未被宣称已实测。
