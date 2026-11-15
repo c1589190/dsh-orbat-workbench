@@ -42,3 +42,58 @@ export async function runEditRequest(operation,refresh) {
     return {ok:false,error};
   }
 }
+export function coverageSummary(stats) {
+  const coverage=stats?.coverage;
+  if(!coverage)return {incomplete:false,unknown:0,ambiguous:0,estimated:0,text:''};
+  const unknown=(coverage.personnel?.unknown||0)+(coverage.equipment?.unknown||0);
+  const ambiguous=(coverage.personnel?.legacyAmbiguous||0)+(coverage.equipment?.legacyAmbiguous||0);
+  const estimated=(coverage.personnel?.estimated||0)+(coverage.equipment?.estimated||0);
+  const incomplete=unknown>0||ambiguous>0;
+  return {incomplete,unknown,ambiguous,estimated,text:incomplete?('未知 '+unknown+' · 歧义 '+ambiguous):('已知 · 估计 '+estimated)};
+}
+export function editEquipmentItem(equipment,index,patch) {
+  const list=JSON.parse(JSON.stringify(equipment||[]));
+  if(!Number.isInteger(index)||index<0||index>=list.length)return list;
+  const current={...list[index]};
+  for(const [key,value] of Object.entries(patch||{})){
+    if(value===undefined||value===null)delete current[key];else current[key]=value;
+  }
+  if(current.orbat&&Object.keys(current.orbat).length===0)delete current.orbat;
+  list[index]=current;
+  return list;
+}
+export function appendEquipmentItem(equipment,item) {
+  const list=JSON.parse(JSON.stringify(equipment||[]));
+  list.push({name:'新装备',count:0,...(item||{})});
+  return list;
+}
+export function removeEquipmentItem(equipment,index) {
+  const list=JSON.parse(JSON.stringify(equipment||[]));
+  if(Number.isInteger(index)&&index>=0&&index<list.length)list.splice(index,1);
+  return list;
+}
+export function setPersonnelEvidence(custom,status,source) {
+  const next=custom&&typeof custom==='object'?JSON.parse(JSON.stringify(custom)):{};
+  const orbat=next.orbat&&typeof next.orbat==='object'?next.orbat:{};
+  if(status){
+    const record={status};
+    if(source&&typeof source==='object'&&Object.keys(source).length)record.source=source;
+    orbat.version=1;orbat.personnel=record;next.orbat=orbat;
+  }else if(orbat.personnel){
+    delete orbat.personnel;
+    if(Object.keys(orbat).length<=1)delete next.orbat;
+  }
+  return next;
+}
+export function planStaleDocuments(plan,documents) {
+  const revisions=new Map((documents||[]).map(doc=>[doc.id,doc.revision]));
+  return (plan?.edits||[]).filter(edit=>revisions.get(edit.documentId)!==edit.expectedRevision)
+    .map(edit=>({documentId:edit.documentId,expectedRevision:edit.expectedRevision,revision:revisions.get(edit.documentId)??null}));
+}
+export function planSummary(result) {
+  const plan=result?.plan||result;
+  return {documents:(plan?.edits||[]).length,operations:(plan?.edits||[]).reduce((sum,edit)=>sum+((edit.operations||[]).length),0),
+    selectedNodes:result?.stats?.selectedNodes??0,diffs:(result?.diffs||[]).length,
+    personnelBefore:result?.stats?.personnel?.before??null,personnelAfter:result?.stats?.personnel?.after??null,
+    warnings:(result?.warnings||[]).length};
+}

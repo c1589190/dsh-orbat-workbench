@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import ms from 'milsymbol';
 import { Resvg } from '@resvg/resvg-js';
+import { stats } from './model.js';
+import { isIncomplete, nodeEvidence } from './evidence.js';
 
 /**
  * 产品渲染：把一份编制文档渲染为同一份内容的 SVG 与 PNG。
@@ -16,6 +18,16 @@ const MAX_HEIGHT = 16000;
 const DEFAULT_MAX_NODES = 200;
 const ABSOLUTE_MAX_NODES = 2000;
 const MAX_SCAN_NODES = 10000;
+
+const INCOMPLETE_SUFFIX = ' · 数据不完整（含未知/歧义）';
+
+function coverageSuffix(document) {
+  try {
+    return isIncomplete(stats(document.root).coverage) ? INCOMPLETE_SUFFIX : '';
+  } catch {
+    return '';
+  }
+}
 
 /**
  * 原编辑器兵牌样式适配（editor 模式）。
@@ -598,8 +610,10 @@ function renderNodeCard(row, index) {
   const symbol = renderSymbol(node);
   const name = escapeXml(clipText(node?.name || '未命名节点', 26));
   const echelons = escapeXml(echelonText(node?.echelon));
+  const evidence = nodeEvidence(node);
+  const personnelUnknown = ['unknown', 'legacy-ambiguous'].includes(evidence?.personnel?.status);
   const stats = escapeXml(
-    `本级 ${row.ownPersonnel} 人 · 子树 ${row.subPersonnel} 人 · 装备 ${row.ownEquipment} 件`,
+    `本级 ${personnelUnknown ? '?' : row.ownPersonnel} 人 · 子树 ${row.subPersonnel} 人 · 装备 ${row.ownEquipment} 件`,
   );
   const isRoot = row.depth === 0;
   const border = isRoot ? '#2f4a6d' : '#b6bdc9';
@@ -717,7 +731,11 @@ function renderListDocument(document, options = {}) {
   const title = clipText(document?.name || '未命名编制', 40);
   const revision =
     document?.revision === undefined || document?.revision === null ? '-' : document.revision;
-  const meta = `修订 ${clipText(revision, 24)} · 节点 ${total} 个 · 总人数 ${scope.rootRow.subPersonnel} 人 · 装备 ${scope.rootRow.subEquipment} 件`;
+  const meta = clipText(
+    `修订 ${clipText(revision, 24)} · 节点 ${total} 个 · 总人数 ${scope.rootRow.subPersonnel} 人 · ` +
+      `装备 ${scope.rootRow.subEquipment} 件${coverageSuffix(document)}`,
+    200,
+  );
 
   const notices = [];
   if (scope.scanLimited) {
@@ -887,7 +905,12 @@ function renderEditorBadge(kind, prefix, valueText, y) {
 function renderEditorBadges(row) {
   let y = 2;
   let markup = '';
-  if (row.subPersonnel > 0 || row.subPersonnelMax > 0) {
+  const evidence = nodeEvidence(row.node);
+  const personnelUnknown = ['unknown', 'legacy-ambiguous'].includes(evidence?.personnel?.status);
+  if (personnelUnknown) {
+    markup += renderEditorBadge('personnel', '人', '?', y);
+    y += 16;
+  } else if (row.subPersonnel > 0 || row.subPersonnelMax > 0) {
     markup += renderEditorBadge('personnel', '人', fmtRange(row.subPersonnel, row.subPersonnelMax), y);
     y += 16;
   }
@@ -1257,8 +1280,8 @@ function renderEditorDocument(document, options = {}) {
     document?.revision === undefined || document?.revision === null ? '-' : document.revision;
   const meta = clipText(
     `修订 ${clipText(revision, 24)} · 节点 ${total} 个 · 总人数 ${fmtRange(scope.rootRow.subPersonnel, scope.rootRow.subPersonnelMax)} 人 · ` +
-      `装备 ${fmtRange(scope.rootRow.subEquipment, scope.rootRow.subEquipmentMax)} 件 · 原编辑器兵牌`,
-    160,
+      `装备 ${fmtRange(scope.rootRow.subEquipment, scope.rootRow.subEquipmentMax)} 件 · 原编辑器兵牌${coverageSuffix(document)}`,
+    220,
   );
 
   const anomalies = collectEditorDataAnomalies(scope.rows);
