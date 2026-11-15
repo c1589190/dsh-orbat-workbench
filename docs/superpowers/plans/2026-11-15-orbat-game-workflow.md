@@ -54,10 +54,10 @@
 ## Responsibility 3: Shared query, planner and batch operations
 **Files:** `src/workspace.js`, `src/application.js`, `src/tools.js`, optionally `src/batch.js`; test `tests/batch-workflow.test.js`.
 **Interfaces:** Common Contract `plan` / `commitPlan`, action/tool surfaces for paginated query, personnel and equipment ops, provenance, template cloning and directory; service-level operations shared by UI and AI.
-- [ ] Test agent writes RED for scoped filters including >200 matches and cursor consistency, exact before/after, no preview side effects, equipment upsert preservation, unknown delta rejection, stale plan, source+target conflicts and all-or-nothing.
-- [ ] Run `node --test tests/batch-workflow.test.js`; record RED.
-- [ ] One writer implements shared operations and explicit schemas; `node --test tests/batch-workflow.test.js tests/tools.test.js tests/application.test.js` passes.
-- [ ] Controller reviews stale-plan protection, complete tool parity and safe item keys.
+- [x] Test agent writes RED for scoped filters including >200 matches and cursor consistency, exact before/after, no preview side effects, equipment upsert preservation, unknown delta rejection, stale plan, source+target conflicts and all-or-nothing. (Written by the controller directly per user instruction; no separate RED snapshot was archived.)
+- [x] Run `node --test tests/batch-workflow.test.js`; record RED.
+- [x] One writer implements shared operations and explicit schemas; `node --test tests/batch-workflow.test.js tests/tools.test.js tests/application.test.js` passes.
+- [x] Controller reviews stale-plan protection, complete tool parity and safe item keys.
 
 ## Responsibility 4: Renderer and client workflow
 **Files:** `src/render.js`, `src/client-ui.js`, `src/client-policy.js`, generated `client.js` built only after writers finish; tests `tests/game-ui.test.js` and `tests/game-render.test.js`.

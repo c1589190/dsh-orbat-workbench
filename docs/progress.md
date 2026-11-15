@@ -1,5 +1,13 @@
 # Demo execution ledger
 
+## 2026-11-15 责任区3（已完成）
+- 新增 `src/batch.js`：同一套筛选（text/type/echelon/nodeIds）编译为冻结 revision 的精确事务；支持 personnel set/delta、equipment upsert/remove（occurrence 与额外字段保留）、evidence、remark；预览无写入，返回 diffs/stats/warnings，无匹配/无变化/超上限/负人数均结构化拒绝。
+- 新增应用与工具 `plan`/`commitPlan`（`orbat_plan`/`orbat_commit`）：提交只执行计划中的节点与 revision，不重扫选择条件；新增 `guards` 只读 revision 守卫，源文档变化使整笔冲突。`query` 支持 sequence 游标翻页并在工作区变化后返回 `stale_cursor`，覆盖 >200 匹配。
+- 事务新增 `mergeCustom`（命名空间深合并，保留无关 custom；非对象 custom 触发 `custom_conflict`）、`template`（模板克隆、重生成 id、可选改名）与 `guards`。资源 `resources`/`updateResources` 暴露到应用与工具；导出返回兼容损失报告。
+- 新增 `tests/batch-workflow.test.js` 12 项；全量 **180/180** 通过，`scripts/check.mjs` rc=0；提交 `36fbc49`。
+- 说明：按用户要求不再派遣责任区子 Agent，测试与实现由主 Agent 直接完成；因此没有像前两区那样单独保存“实现前 RED”日志。未做跨文档源节点克隆专用操作（用模板与 guards 覆盖），批量命名/模板 UI 留给责任区4。
+- 下一步：责任区4（结构化装备表、资料/数量状态、直属/合计、批量预览与提交 UI、模板入口、渲染不完整标记、build）。
+
 ## 2026-11-15 责任区2（已完成）
 - 用户要求不再为每个小责任区派遣子 Agent，剩余工作由主 Agent 直接完成；责任区2 的已派测试 Agent 在写出文件前被停止，测试与实现均由主 Agent 重新完成。
 - `workspace.js` 状态升级到 v2：`resources:{revision,catalog,templates}`；v1 文件打开时迁移、下次写入升级；未知版本 fail-closed 且不改写原文件。`resources()`/`updateResources()` 以独立 expectedRevision 守卫（陈旧返回 `resource_conflict`），非法键、无限数值、重名/别名冲突、坏模板 root 均原子拒绝。
