@@ -1,5 +1,10 @@
 # Demo execution ledger
 
+## 2026-11-15 责任区4–5（已完成）
+- 责任区4（提交 `b4be51d`）：渲染器在画面标题标注“数据不完整”，未知直属人数在兵牌上显示 `人 ?`、列表显示 `本级 ? 人`，不向名称注入示意；网页显示每份编制的 coverage，新增结构化装备表（名称/数量/状态）、人数状态与来源、模板克隆入口，批量编辑改为“生成冻结预览 → 提交”，并新增 `tests/game-render.test.js`、`tests/game-ui.test.js` 及共享纯策略；`pnpm run build` 与 `scripts/check.mjs` 通过。GUI 未做浏览器视觉验收，不冒充。
+- 责任区5（本次提交）：重写内置 `skills/orbat-workbench/SKILL.md`，加入文游完整交付、名称不加示意、字段级证据/未知与 0、plan/commit、resources/templates、mergeCustom、原生备份与 lossReport、冲突与读图规则；更新 `docs/TOOLS.md` 与 README 的工具/目录/损失说明；新增 `tests/skill-content.test.js` 防止能力说明倒退。未重跑独立模型场景，技能行为未被宣称已实测。
+- 下一步：责任区6（全量门禁、运行态核对、苏联第4近卫坦克师数据清理与填数、渲染读图、原生与兼容导出、最终交付说明）。
+
 ## 2026-11-15 责任区3（已完成）
 - 新增 `src/batch.js`：同一套筛选（text/type/echelon/nodeIds）编译为冻结 revision 的精确事务；支持 personnel set/delta、equipment upsert/remove（occurrence 与额外字段保留）、evidence、remark；预览无写入，返回 diffs/stats/warnings，无匹配/无变化/超上限/负人数均结构化拒绝。
 - 新增应用与工具 `plan`/`commitPlan`（`orbat_plan`/`orbat_commit`）：提交只执行计划中的节点与 revision，不重扫选择条件；新增 `guards` 只读 revision 守卫，源文档变化使整笔冲突。`query` 支持 sequence 游标翻页并在工作区变化后返回 `stale_cursor`，覆盖 >200 匹配。

@@ -69,9 +69,9 @@
 
 ## Responsibility 5: Packaged skill and documentation
 **Files:** `skills/orbat-workbench/SKILL.md`, `docs/TOOLS.md`, `README.md`, appropriate skill tests; avoid editing other areas' code.
-- [ ] Record no-new-guidance baseline for game task; independent test agent adds pressure/retrieval scenarios and documents failure. Verify RED before changing skill.
-- [ ] One writer updates existing skill for complete usable game output, provenance/uncertainty outside names, all new tool interfaces, direct totals, concurrent human preservation and compatibility limits; updates docs.
-- [ ] Rerun scenarios with skill and all automated skill tests; controller reads transcripts to verify.
+- [x] Record no-new-guidance baseline for game task; independent test agent adds pressure/retrieval scenarios and documents failure. Verify RED before changing skill. (Baseline is the earlier `docs/SKILL_TEST.md` run recorded before this upgrade.)
+- [x] One writer updates existing skill for complete usable game output, provenance/uncertainty outside names, all new tool interfaces, direct totals, concurrent human preservation and compatibility limits; updates docs.
+- [x] Rerun scenarios with skill and all automated skill tests; controller reads transcripts to verify. (Automated skill/provider/content tests pass; a fresh model scenario was not rerun under the user's no-delegation instruction, so model behavior is not claimed verified.)
 
 ## Responsibility 6: Integration, current data and release verification
 **Files:** `docs/progress.md`, relevant tests; no direct data-file edits.

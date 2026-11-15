@@ -8,15 +8,19 @@
 |---|---|---|
 | orbat_workspace | since?, limit? | sequence、文档摘要、revision、合法type/echelon、近期changes |
 | orbat_read | documentIds?, nodeId?, depth=4 | 文档树、稳定id、revision、truncated、omitted；depth0–24 |
-| orbat_query | documentIds?, text?, type?, echelon?, limit=100 | matches、total、truncated；limit1–200，不提供分页 |
+| orbat_query | documentIds?, select{text,type,echelon,nodeIds}?, text?, type?, echelon?, cursor?, limit=100 | matches、total、offset、nextCursor、truncated、sequence；limit1–200；工作区变化后旧cursor返回stale_cursor |
 | orbat_create | name, root? | 新文档id/revision/rootId与change；未传root创建空白营 |
 | orbat_duplicate | documentId, name? | 新的独立编制，内部id全部重建 |
-| orbat_edit | edits, summary? | 原子提交的文档修订摘要与字段差异；diff超过60时工具回执截断，详情查changes |
+| orbat_edit | edits, summary?, guards? | 原子提交的文档修订摘要与字段差异；diff超过60时工具回执截断，详情查changes；guards为只读源revision守卫 |
 | orbat_changes | since=0, limit=50 | changes、nextCursor、latestSequence、hasMore、truncated |
-| orbat_import | payload | 裸树、mil-org、mil-bundle.saves导入结果；新id |
+| orbat_plan | documentIds?, select?, operation, maxNodes?, summary? | 冻结revision的plan、逐字段diffs、stats与warnings；绝不写入 |
+| orbat_commit | plan, guards? | 提交plan.edits；不重新扫描选择条件；过期整笔CONFLICT |
+| orbat_resources | — | resources.revision、catalog{version,equip}、templates{version,items} |
+| orbat_update_resources | expectedRevision, catalog?, templates?, summary? | 原子更新资源；陈旧返回resource_conflict；非法目录/模板原子拒绝 |
+| orbat_import | payload | 裸树、mil-org、mil-bundle.saves导入结果；接受非空上游装备库并原子合并，名称/别名冲突返回catalog_conflict |
 | orbat_validate | documentIds? | 已存编制的结构有效状态、统计与兼容提示；不证明史实或战斗能力 |
 | orbat_render | documentIds?, nodeId?, mode=editor\|list | 最多10份图片的pngPath/svgPath、尺寸、shown/total/truncated；URL带修订，修订不符返回冲突 |
-| orbat_export | documentIds?, format? | JSON文件path；单份默认mil-org，多份默认mil-bundle |
+| orbat_export | documentIds?, format? | JSON文件path与lossReport；单份默认mil-org，多份默认mil-bundle；兼容损失逐项列出 |
 
 ## 事务形状
 
@@ -33,7 +37,9 @@
 
 操作：
 
-- update：`nodeId,fields`，**合并指定字段**，不是替换整节点；fields白名单由模型校验。
+- update：`nodeId,fields`，**合并指定字段**，不是替换整节点；fields白名单由模型校验。传 `custom` 仍是整块替换。
+- mergeCustom：`nodeId,fields.custom`，按命名空间深合并到现有 custom，保留无关命名空间；`null` 删除键；现有 custom 不是对象时返回 `custom_conflict`，不覆盖。
+- template：`parentId,templateId,name?,index?`，从模板库克隆子树，内部 id 重建；可改名。
 - add：`parentId,node,index?`，添加新子树，内部id重建。
 - remove：`nodeId`，删除子树，禁止根。
 - move：`nodeId,parentId,index?`，稳定id，禁止根与循环；index是移除后目标数组的位置，默认末尾。
@@ -41,7 +47,32 @@
 - rename：`name`，修改文档/存档名（不是根节点name）。
 - deleteDocument：删除整份文档，必须为该edit唯一操作；也可与其他文档edit原子组合。
 
+`guards:[{documentId,expectedRevision}]` 只读校验源文档/其他文档，任一过期使整笔不提交，可与其他 edit 原子组合。每份文档只增一次revision；整个事务只增一次sequence。
+
 每份文档只增一次revision；整个事务只增一次sequence；任一edit无效则全部不提交。CONFLICT 返回 `{ok:false,error:{code:'CONFLICT',message,details:{documentId,expectedRevision,actualRevision,current}}}`。
+
+## 批量 plan / commit
+
+```json
+{
+  "documentIds": ["真实文档id"],
+  "select": {"text": "班", "echelon": "squad"},
+  "operation": {"kind": "personnel", "mode": "set", "value": 10,
+                "status": "standard", "source": {"title": "来源", "page": "12"}},
+  "maxNodes": 400,
+  "summary": "把各班补到10人"
+}
+```
+
+- 支持的 operation：`personnel`（`mode:set|delta,value,status?,source?`）、`equipment`（`mode:upsert|remove,name,count?,countMax?,occurrence?,status?,source?`）、`evidence`（`target:personnel|equipmentList,status,source?`）、`remark`（`value`）。
+- 返回 `{plan,diffs,stats,warnings}`；`plan` 的每个 edit 都带生成时的 `expectedRevision`。预览不写工作区。
+- 提交调用 `commitPlan`/`orbat_commit`，只传这份 `plan`（可附 `guards`）。提交不重新跑选择条件；任何 revision 过期即整笔 CONFLICT。
+- 无匹配返回 `empty_selection`；值已一致返回 `no_changes`；匹配超 `maxNodes` 返回 `too_many_matches`；非法人数/状态/来源在生成计划时拒绝。
+
+## 资源与目录
+
+- `orbat_resources` 返回 `{revision,catalog,templates}`。catalog 形状 `{version:1,equip:{id:{id,name,aliases?,category?,stats?}}}`；templates 形状 `{version:1,items:{id:{id,name,root}}}`。
+- 修改必须带刚读的 `revision`（`expectedRevision`）；目录重名/别名冲突、非法 JSON、坏模板 root 都原子拒绝。模板 root 带 id 时保留原生 round-trip id；新建无 id 模板会分配内部 id。
 
 ## 游标、截断与并发
 
@@ -49,7 +80,8 @@
 - since与nextCursor都属于sequence域。首次读changes从0开始；只在实际消费本页后推进到nextCursor，翻页到hasMore=false。刚从workspace看到的sequence不是已读游标。
 - 历史最多500条。truncated=true表示请求范围有永久缺口；报告此事实，读当前完整文档，然后消费仍保留的变化直至hasMore=false，以最后nextCursor作为后续基点。不能补造丢失记录。
 - 冲突后不要改revision数字重放旧操作。先读changes和当前树，重新查询目标集合、重建操作。若持续并发，可停止并请人协商，不无限重试。
-- query超200结果时truncated=true；按已读树的各子树使用read(nodeId,depth)收集稳定节点id，或按更窄的type/echelon/text拆查询。不要把前200项当作全部。
+- query超过 `limit` 时返回 `nextCursor`（形如 `sequence:offset`）；带着它翻到 `nextCursor:null`。`sequence` 变化后旧 cursor 返回 `stale_cursor`，从第一页重查，不能把旧页码当同一集合。
+- 批量选择用 `orbat_plan` 的 `select`；匹配数超过 `maxNodes` 返回 `too_many_matches`，应缩小筛选或分批，不要静默只改前 N 个。
 - read的depth截断是返回投影，不修改工作区；hiddenChildren/omitted是继续读取提示。
 
 ## 人数、上限和名称
@@ -78,4 +110,4 @@ render返回一文档一图，每个artifact独立报告节点截断 `truncated`
 
 ## 导出范围
 
-mil-org单份；mil-bundle多份saves，同名自动加后缀避免覆盖。导出前读取当前revision/统计，导出后用read读取文件确认saves数量/名称/data以及人员、装备，必要时比较统计。导出不执行网站导入，也不带地图与自定义装备数值。
+mil-org单份；mil-bundle多份saves，同名自动加后缀避免覆盖；`mil-bundle.equip` 携带工作区装备目录，mil-org不带目录。导出前读取当前revision/统计，导出后用read确认saves数量/名称/data、人员装备与 `equip`。必须阅读返回的 `lossReport`：内部节点 id、扩展字段、字段级资料、模板、别名、历史等兼容损失逐项列出；不要声称往返无损。导出不执行网站导入；地图不在本工作台导出范围。
