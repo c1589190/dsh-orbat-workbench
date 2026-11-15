@@ -46,10 +46,10 @@
 ## Responsibility 2: Native interchange, catalog and template persistence
 **Files:** `src/workspace.js`, `src/model.js` only if controller coordinates, new persistence helper if needed; test `tests/native-interchange.test.js`.
 **Interfaces:** Common Contract native shape. `Workspace` exposes native import/export and safe catalog/templates operations; preserve old file behavior except explicit added support for nonempty equipment library.
-- [ ] Test agent writes RED tests for native identity-preserving roundtrip, explicit clone mode ID mapping, identity conflict atomicity, version1→2 migration, old reader fail-closed, library+template persistence through transaction/reopen, invalid/prototype keys, compatible export loss report and successful nonempty custom-library import (collision must reject without writes).
-- [ ] Run `node --test tests/native-interchange.test.js`; record RED.
-- [ ] One writer implements persisted catalog/templates and import/export with versioning and documented loss report; no mutation of live workspace.
-- [ ] Run test file and relevant existing workspace tests; controller reviews backward compatibility and persists status.
+- [x] Test agent writes RED tests for native identity-preserving roundtrip, explicit clone mode ID mapping, identity conflict atomicity, version1→2 migration, old reader fail-closed, library+template persistence through transaction/reopen, invalid/prototype keys, compatible export loss report and successful nonempty custom-library import (collision must reject without writes).
+- [x] Run `node --test tests/native-interchange.test.js`; record RED. (15 tests: 14 RED after implementation began; the unsupported-version case passes because v3 was already rejected.)
+- [x] One writer implements persisted catalog/templates and import/export with versioning and documented loss report; no mutation of live workspace.
+- [x] Run test file and relevant existing workspace tests; controller reviews backward compatibility and persists status. (168/168; unknown versions fail closed; actual older binary cannot be retested locally.)
 
 ## Responsibility 3: Shared query, planner and batch operations
 **Files:** `src/workspace.js`, `src/application.js`, `src/tools.js`, optionally `src/batch.js`; test `tests/batch-workflow.test.js`.

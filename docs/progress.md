@@ -1,5 +1,14 @@
 # Demo execution ledger
 
+## 2026-11-15 责任区2（已完成）
+- 用户要求不再为每个小责任区派遣子 Agent，剩余工作由主 Agent 直接完成；责任区2 的已派测试 Agent 在写出文件前被停止，测试与实现均由主 Agent 重新完成。
+- `workspace.js` 状态升级到 v2：`resources:{revision,catalog,templates}`；v1 文件打开时迁移、下次写入升级；未知版本 fail-closed 且不改写原文件。`resources()`/`updateResources()` 以独立 expectedRevision 守卫（陈旧返回 `resource_conflict`），非法键、无限数值、重名/别名冲突、坏模板 root 均原子拒绝。
+- 新增 `exportNative()`/`importNative()`：保留文档 id、revision、节点 id 与证据；merge 遇任一身份冲突整笔拒绝；clone 重新生成 id 并返回完整 idMap 与损失说明。原生完整备份带 changes/droppedThrough，导入时明确报告历史未恢复。
+- 新增 `exportCompatible()`：兼容 payload 与旧 `export()` 一致，另返回确定性损失报告（内部 id、扩展元数据、资料、模板、目录/别名、历史）。`mil-bundle` 导出目录；`mil-org`/`mil-bundle` 导入接受非空上游装备库并原子合并，冲突拒绝。
+- 新增 `tests/native-interchange.test.js` 15 项；全量 **168/168** 通过，`scripts/check.mjs` rc=0；提交 `f39a079`。
+- 已知接线缺口：resources 尚未进入 `application`/tools/UI 的 state 与 SSE 事件，留给责任区3/4；真实旧版进程无法本地复测，用未知版本拒绝覆盖 fail-closed。未运行 build，未重启 Host。
+- 下一步：责任区3（共享筛选/分页、plan/commitPlan、批量人员装备与资料合并、模板克隆、跨文档 revision 守卫）。
+
 ## 2026-11-15 Git 仓库初始化与责任区1（已完成）
 - 按用户要求初始化 Git 并推送 remote `git@github.com:c1589190/dsh-orbat-workbench.git`，package 版本改为 `0.0.1`、`license: MIT`；LICENSE 保留 M.Hikari 与 contributors 两行版权。基线提交 `273f988`（导入当前源码，含当时 10 项预期 RED）。
 - 责任区1 GREEN，提交 `cc02905`：`stats()` 先规范化原始树再统计，合法缺字段树不再 TypeError/NaN；装备 coverage 新增 `known` 按名称小计与 `knownTotal`，排除 unknown/legacy-ambiguous 占位，未标注空装备清单计 legacy 歧义、显式 actual 空清单为已知空；证据只读 own `orbat` 属性（新增 5 项原型链安全测试到 `tests/evidence-model.test.js`）。
